@@ -12,6 +12,16 @@ import { Model } from 'mongoose';
 import { AuthenticatedRequest } from './auth.guard';
 import { User } from '../schemas/user.schema';
 
+interface MontaoGpsLoginResponse {
+  access_token?: string;
+  user?: {
+    email?: string;
+    name?: string;
+    last_name?: string;
+    role?: unknown;
+  };
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -53,17 +63,25 @@ export class AuthService {
 
   async login(body: { email?: string; password?: string }) {
     const cleanEmail = String(body.email || '').trim().toLowerCase();
+    const cleanPassword = String(body.password || '');
 
-    if (!cleanEmail || !body.password) {
+    if (!cleanEmail || !cleanPassword) {
       throw new BadRequestException('Correo y contrasena son requeridos');
     }
 
     const user = await this.userModel.findOne({ email: cleanEmail });
-    const passwordMatches = user
-      ? await bcrypt.compare(String(body.password), user.passwordHash)
-      : false;
+    if (!user) {
+      const gpsUser = await this.loginWithMontaoGps(cleanEmail, cleanPassword);
+      if (!gpsUser) {
+        throw new UnauthorizedException('Credenciales invalidas');
+      }
 
-    if (!user || !passwordMatches) {
+      const syncedUser = await this.createUserFromMontaoGps(cleanEmail, cleanPassword, gpsUser);
+      return this.createSession(syncedUser);
+    }
+
+    const passwordMatches = await bcrypt.compare(cleanPassword, user.passwordHash);
+    if (!passwordMatches) {
       throw new UnauthorizedException('Credenciales invalidas');
     }
 
@@ -139,5 +157,55 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  private async loginWithMontaoGps(
+    email: string,
+    password: string,
+  ): Promise<MontaoGpsLoginResponse['user'] | null> {
+    const gpsApiUrl = process.env['MONTAO_GPS_API_URL'] || 'https://tracker-back.dorhu.com';
+
+    const response = await fetch(`${gpsApiUrl}/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      return null;
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoGpsLoginResponse | null;
+    if (!payload?.access_token || !payload.user?.email) {
+      return null;
+    }
+
+    return payload.user;
+  }
+
+  private async createUserFromMontaoGps(
+    email: string,
+    password: string,
+    gpsUser: NonNullable<MontaoGpsLoginResponse['user']>,
+  ) {
+    const cleanGpsEmail = String(gpsUser.email || email).trim().toLowerCase();
+    const fullName = [gpsUser.name, gpsUser.last_name]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join(' ');
+
+    const existingUser = await this.userModel.findOne({ email: cleanGpsEmail });
+    if (existingUser) {
+      return existingUser;
+    }
+
+    return this.userModel.create({
+      email: cleanGpsEmail,
+      passwordHash: await bcrypt.hash(password, 12),
+      name: fullName || cleanGpsEmail,
+      role: typeof gpsUser.role === 'string' && gpsUser.role.trim() ? gpsUser.role : 'user',
+    });
   }
 }
