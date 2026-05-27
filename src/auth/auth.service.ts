@@ -27,6 +27,10 @@ interface MontaoGpsUserExistsResponse {
   exists?: boolean;
 }
 
+interface MontaoRentUserExistsResponse {
+  exists?: boolean;
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -152,6 +156,30 @@ export class AuthService {
     };
   }
 
+  async currentUserExistsInMontaoGps(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    return {
+      exists: await this.userExistsInMontaoGps(user.email),
+    };
+  }
+
+  async currentUserExistsInMontaoRent(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    return {
+      exists: await this.userExistsInMontaoRent(user.email),
+    };
+  }
+
   private createSession(user: { id: string; email: string; name: string; role: string }) {
     const token = this.jwtService.sign({
       sub: user.id,
@@ -225,6 +253,39 @@ export class AuthService {
     }
 
     return payload?.exists === true;
+  }
+
+  private async userExistsInMontaoRent(email: string): Promise<boolean> {
+    const rentApiUrl = process.env['RENT_API_URL'] || 'https://backend-rent.montao.net';
+    const rentApiToken = process.env['RENT_API_TOKEN'];
+
+    if (!rentApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao Rent');
+    }
+
+    const response = await fetch(
+      `${rentApiUrl}/users/exists-by-email?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${rentApiToken}`,
+        },
+      },
+    ).catch(() => null);
+
+    if (!response?.ok) {
+      throw new ServiceUnavailableException(
+        'No se pudo validar si el correo existe en Montao Rent',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoRentUserExistsResponse | null;
+    if (!payload || typeof payload.exists !== 'boolean') {
+      throw new ServiceUnavailableException(
+        'Montao Rent no devolvio una validacion de correo valida',
+      );
+    }
+
+    return payload.exists === true;
   }
 
   private async createUserFromMontaoGps(

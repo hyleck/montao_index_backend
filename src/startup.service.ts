@@ -31,7 +31,7 @@ const defaultApps = [
     order: 2,
   },
   {
-    name: 'GPS Mobile',
+    name: 'Montao GPS',
     description: 'Instalaciones, inventario, rutas, vehiculos y seguimiento tecnico.',
     category: 'Tecnologia',
     group: 'Operaciones',
@@ -114,5 +114,7 @@ export class StartupService implements OnModuleInit {
     if (appCount === 0) {
       await this.appModel.insertMany(defaultApps);
     }
+
+    await this.appModel.updateMany({ name: 'GPS Mobile' }, { $set: { name: 'Montao GPS' } });
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthenticatedRequest, AuthGuard } from './auth.guard';
 
@@ -25,5 +25,15 @@ export class SsoController {
   @Post('montao-gps')
   montaoGps(@Req() request: AuthenticatedRequest) {
     return this.authService.createMontaoGpsSso(request);
+  }
+
+  @Get('montao-gps/user-exists')
+  montaoGpsUserExists(@Req() request: AuthenticatedRequest) {
+    return this.authService.currentUserExistsInMontaoGps(request);
+  }
+
+  @Get('montao-rent/user-exists')
+  montaoRentUserExists(@Req() request: AuthenticatedRequest) {
+    return this.authService.currentUserExistsInMontaoRent(request);
   }
 }
