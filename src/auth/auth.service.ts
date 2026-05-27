@@ -369,6 +369,25 @@ export class AuthService {
       throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
     }
 
+    const directResponse = await fetch(
+      `${crmApiUrl}/api/users/exists-by-email?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${crmApiToken}`,
+        },
+      },
+    ).catch(() => null);
+
+    if (directResponse?.ok) {
+      const directPayload = (await directResponse.json().catch(() => null)) as
+        | { exists?: boolean }
+        | null;
+
+      if (typeof directPayload?.exists === 'boolean') {
+        return directPayload.exists;
+      }
+    }
+
     const response = await fetch(`${crmApiUrl}/api/users`, {
       headers: {
         Authorization: `Bearer ${crmApiToken}`,
