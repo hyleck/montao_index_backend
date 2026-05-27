@@ -156,6 +156,58 @@ export class AuthService {
     };
   }
 
+  async createMontaoRentSso(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    const rentApiUrl = process.env['RENT_API_URL'] || 'https://backend-rent.montao.net';
+    const rentFrontendUrl = process.env['RENT_FRONTEND_URL'] || 'https://rent.montao.net';
+    const rentApiToken = process.env['RENT_API_TOKEN'];
+
+    if (!rentApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao Rent');
+    }
+
+    const response = await fetch(`${rentApiUrl}/auth/sso/exchange`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${rentApiToken}`,
+      },
+      body: JSON.stringify({
+        email: user.email,
+        name: user.name,
+        source: 'montao_index',
+      }),
+    });
+
+    if (!response.ok) {
+      const payload = (await response
+        .json()
+        .catch(() => ({ message: 'No se pudo iniciar SSO con Montao Rent' }))) as {
+        message?: string;
+      };
+      throw new HttpException(
+        payload.message || 'No se pudo iniciar SSO con Montao Rent',
+        response.status,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      access_token: string;
+      user?: unknown;
+    };
+    const token = encodeURIComponent(payload.access_token);
+    const rentUser = encodeURIComponent(JSON.stringify(payload.user || {}));
+
+    return {
+      redirectUrl: `${rentFrontendUrl}/auth/sso?token=${token}&user=${rentUser}`,
+    };
+  }
+
   async currentUserExistsInMontaoGps(request: AuthenticatedRequest) {
     const user = await this.userModel.findById(request.user.sub).lean();
 
