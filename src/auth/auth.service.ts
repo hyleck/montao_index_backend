@@ -53,12 +53,12 @@ export class AuthService {
 
     const existingUser = await this.userModel.findOne({ email: cleanEmail });
     if (existingUser) {
-      throw new ConflictException('Ese correo ya esta registrado');
+      throw new ConflictException('Este correo no esta disponible');
     }
 
     const gpsUserExists = await this.userExistsInMontaoGps(cleanEmail);
     if (gpsUserExists) {
-      throw new ConflictException('Ese correo ya esta registrado en Montao GPS');
+      throw new ConflictException('Este correo no esta disponible');
     }
 
     const user = await this.userModel.create({
