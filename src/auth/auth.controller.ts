@@ -32,6 +32,11 @@ export class SsoController {
     return this.authService.createMontaoRentSso(request);
   }
 
+  @Post('montao-crm')
+  montaoCrm(@Req() request: AuthenticatedRequest) {
+    return this.authService.createMontaoCrmSso(request);
+  }
+
   @Get('montao-gps/user-exists')
   montaoGpsUserExists(@Req() request: AuthenticatedRequest) {
     return this.authService.currentUserExistsInMontaoGps(request);

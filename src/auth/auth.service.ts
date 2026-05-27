@@ -217,6 +217,58 @@ export class AuthService {
     };
   }
 
+  async createMontaoCrmSso(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    const crmApiUrl = process.env['CRM_API_URL'] || 'https://crmbackend.dorhu.com';
+    const crmFrontendUrl = process.env['CRM_FRONTEND_URL'] || 'https://crmgestion.dorhu.com';
+    const crmApiToken = process.env['CRM_API_TOKEN'];
+
+    if (!crmApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
+    }
+
+    const response = await fetch(`${crmApiUrl}/api/auth/sso/exchange`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${crmApiToken}`,
+      },
+      body: JSON.stringify({
+        email: user.email,
+        name: user.name,
+        source: 'montao_index',
+      }),
+    });
+
+    if (!response.ok) {
+      const payload = (await response
+        .json()
+        .catch(() => ({ message: 'No se pudo iniciar SSO con Montao CRM' }))) as {
+        message?: string;
+      };
+      throw new HttpException(
+        payload.message || 'No se pudo iniciar SSO con Montao CRM',
+        response.status,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      access_token: string;
+      user?: unknown;
+    };
+    const token = encodeURIComponent(payload.access_token);
+    const crmUser = encodeURIComponent(JSON.stringify(payload.user || {}));
+
+    return {
+      redirectUrl: `${crmFrontendUrl}/auth/sso?token=${token}&user=${crmUser}`,
+    };
+  }
+
   async currentUserExistsInMontaoGps(request: AuthenticatedRequest) {
     const user = await this.userModel.findById(request.user.sub).lean();
 
