@@ -41,4 +41,9 @@ export class SsoController {
   montaoRentUserExists(@Req() request: AuthenticatedRequest) {
     return this.authService.currentUserExistsInMontaoRent(request);
   }
+
+  @Get('montao-crm/user-exists')
+  montaoCrmUserExists(@Req() request: AuthenticatedRequest) {
+    return this.authService.currentUserExistsInMontaoCrm(request);
+  }
 }

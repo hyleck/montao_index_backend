@@ -31,6 +31,10 @@ interface MontaoRentUserExistsResponse {
   exists?: boolean;
 }
 
+interface MontaoCrmUser {
+  email?: string;
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -62,6 +66,11 @@ export class AuthService {
 
     const gpsUserExists = await this.userExistsInMontaoGps(cleanEmail);
     if (gpsUserExists) {
+      throw new ConflictException('Este correo no esta disponible');
+    }
+
+    const crmUserExists = await this.userExistsInMontaoCrm(cleanEmail);
+    if (crmUserExists) {
       throw new ConflictException('Este correo no esta disponible');
     }
 
@@ -232,6 +241,18 @@ export class AuthService {
     };
   }
 
+  async currentUserExistsInMontaoCrm(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    return {
+      exists: await this.userExistsInMontaoCrm(user.email),
+    };
+  }
+
   private createSession(user: { id: string; email: string; name: string; role: string }) {
     const token = this.jwtService.sign({
       sub: user.id,
@@ -338,6 +359,49 @@ export class AuthService {
     }
 
     return payload.exists === true;
+  }
+
+  private async userExistsInMontaoCrm(email: string): Promise<boolean> {
+    const crmApiUrl = process.env['CRM_API_URL'] || 'https://crmbackend.dorhu.com';
+    const crmApiToken = process.env['CRM_API_TOKEN'];
+
+    if (!crmApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
+    }
+
+    const response = await fetch(`${crmApiUrl}/api/users`, {
+      headers: {
+        Authorization: `Bearer ${crmApiToken}`,
+      },
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      throw new ServiceUnavailableException(
+        'No se pudo validar si el correo existe en Montao CRM',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | MontaoCrmUser[]
+      | { users?: MontaoCrmUser[]; data?: MontaoCrmUser[] }
+      | null;
+
+    const users = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.users)
+        ? payload.users
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : null;
+
+    if (!users) {
+      throw new ServiceUnavailableException(
+        'Montao CRM no devolvio una lista de usuarios valida',
+      );
+    }
+
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    return users.some((user) => String(user.email || '').trim().toLowerCase() === cleanEmail);
   }
 
   private async createUserFromMontaoGps(
