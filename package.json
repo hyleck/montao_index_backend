@@ -4,8 +4,13 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "npm run build && node dist/main.js",
+    "heroku-postbuild": "npm run build",
+    "start": "node dist/main.js",
     "start:dev": "npm run build && node dist/main.js"
+  },
+  "engines": {
+    "node": "22.x",
+    "npm": "10.x"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.24",
