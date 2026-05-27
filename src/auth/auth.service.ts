@@ -3,6 +3,7 @@ import {
   ConflictException,
   HttpException,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -20,6 +21,10 @@ interface MontaoGpsLoginResponse {
     last_name?: string;
     role?: unknown;
   };
+}
+
+interface MontaoGpsUserExistsResponse {
+  exists?: boolean;
 }
 
 @Injectable()
@@ -49,6 +54,11 @@ export class AuthService {
     const existingUser = await this.userModel.findOne({ email: cleanEmail });
     if (existingUser) {
       throw new ConflictException('Ese correo ya esta registrado');
+    }
+
+    const gpsUserExists = await this.userExistsInMontaoGps(cleanEmail);
+    if (gpsUserExists) {
+      throw new ConflictException('Ese correo ya esta registrado en Montao GPS');
     }
 
     const user = await this.userModel.create({
@@ -183,6 +193,38 @@ export class AuthService {
     }
 
     return payload.user;
+  }
+
+  private async userExistsInMontaoGps(email: string): Promise<boolean> {
+    const gpsApiUrl = process.env['MONTAO_GPS_API_URL'] || 'https://tracker-back.dorhu.com';
+    const ssoSecret =
+      process.env['MONTAO_INDEX_SSO_SECRET'] ||
+      process.env['MONTAO_GPS_SSO_SECRET'] ||
+      'montao_index_sso_dev_secret';
+
+    const response = await fetch(`${gpsApiUrl}/auth/sso/user-exists`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-montao-index-sso-secret': ssoSecret,
+      },
+      body: JSON.stringify({ email }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      throw new ServiceUnavailableException(
+        'No se pudo validar si el correo existe en Montao GPS',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoGpsUserExistsResponse | null;
+    if (!payload || typeof payload.exists !== 'boolean') {
+      throw new ServiceUnavailableException(
+        'Montao GPS no devolvio una validacion de correo valida',
+      );
+    }
+
+    return payload?.exists === true;
   }
 
   private async createUserFromMontaoGps(
