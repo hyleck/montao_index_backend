@@ -111,6 +111,54 @@ export class AuthService {
     return this.createSession(user);
   }
 
+  async updateMe(
+    request: AuthenticatedRequest,
+    body: { name?: string; email?: string; password?: string },
+  ) {
+    const cleanName = String(body.name || '').trim();
+    const cleanEmail = String(body.email || '').trim().toLowerCase();
+    const cleanPassword = String(body.password || '');
+
+    if (!cleanName || !cleanEmail) {
+      throw new BadRequestException('Nombre y correo son requeridos');
+    }
+
+    if (!cleanEmail.includes('@')) {
+      throw new BadRequestException('El correo no es valido');
+    }
+
+    if (cleanPassword && cleanPassword.length < 6) {
+      throw new BadRequestException('La contrasena debe tener al menos 6 caracteres');
+    }
+
+    const user = await this.userModel.findById(request.user.sub);
+    if (!user) {
+      throw new UnauthorizedException('Sesion invalida');
+    }
+
+    if (user.email !== cleanEmail) {
+      const existingUser = await this.userModel.findOne({
+        _id: { $ne: user.id },
+        email: cleanEmail,
+      });
+
+      if (existingUser) {
+        throw new ConflictException('Este correo no esta disponible');
+      }
+    }
+
+    user.name = cleanName;
+    user.email = cleanEmail;
+
+    if (cleanPassword) {
+      user.passwordHash = await bcrypt.hash(cleanPassword, 12);
+    }
+
+    await user.save();
+
+    return this.createSession(user);
+  }
+
   async createMontaoGpsSso(request: AuthenticatedRequest) {
     const user = await this.userModel.findById(request.user.sub).lean();
 
