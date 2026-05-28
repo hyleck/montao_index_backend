@@ -66,6 +66,18 @@ const defaultApps = [
     icon: '▤',
     order: 5,
   },
+  {
+    name: 'Montao Talleres',
+    description: 'Gestion de talleres, ordenes de trabajo, mecanicos y servicios tecnicos.',
+    category: 'Operaciones',
+    group: 'Operaciones',
+    owner: 'Talleres',
+    url: 'http://localhost:4500',
+    status: 'Interna',
+    initials: 'TL',
+    icon: '⚙',
+    order: 6,
+  },
 ] as const;
 
 @Injectable()
@@ -110,9 +122,12 @@ export class StartupService implements OnModuleInit {
       });
     }
 
-    const appCount = await this.appModel.countDocuments();
-    if (appCount === 0) {
-      await this.appModel.insertMany(defaultApps);
+    for (const app of defaultApps) {
+      await this.appModel.updateOne(
+        { name: app.name },
+        { $setOnInsert: app },
+        { upsert: true },
+      );
     }
 
     await this.appModel.updateMany({ name: 'GPS Mobile' }, { $set: { name: 'Montao GPS' } });
