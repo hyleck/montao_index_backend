@@ -11,7 +11,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { AuthenticatedRequest } from './auth.guard';
-import { User } from '../schemas/user.schema';
+import { CpanelEmailService } from '../cpanel/cpanel-email.service';
+import { MailCredentialService } from '../mailbox/mail-credential.service';
+import { User, UserDocument } from '../schemas/user.schema';
 
 interface MontaoGpsLoginResponse {
   access_token?: string;
@@ -31,6 +33,11 @@ interface MontaoRentUserExistsResponse {
   exists?: boolean;
 }
 
+interface MontaoRentProvisionResponse {
+  connected?: boolean;
+  created?: boolean;
+}
+
 interface MontaoCrmUser {
   email?: string;
 }
@@ -40,6 +47,8 @@ export class AuthService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<User>,
     private readonly jwtService: JwtService,
+    private readonly cpanelEmailService: CpanelEmailService,
+    private readonly mailCredentialService: MailCredentialService,
   ) {}
 
   async register(body: { name?: string; email?: string; password?: string }) {
@@ -74,32 +83,44 @@ export class AuthService {
       throw new ConflictException('Este correo no esta disponible');
     }
 
+    const mailCredentials = await this.provisionMailboxCredentials(cleanEmail);
+    await this.ensureMontaoRentUser(cleanEmail, cleanName, cleanPassword);
+
     const user = await this.userModel.create({
       email: cleanEmail,
       passwordHash: await bcrypt.hash(cleanPassword, 12),
       name: cleanName,
       role: 'user',
+      ...mailCredentials,
     });
 
     return this.createSession(user);
   }
 
   async login(body: { email?: string; password?: string }) {
-    const cleanEmail = String(body.email || '').trim().toLowerCase();
+    const cleanEmails = this.normalizeLoginEmails(body.email);
+    const primaryEmail = cleanEmails[0] || '';
     const cleanPassword = String(body.password || '');
 
-    if (!cleanEmail || !cleanPassword) {
-      throw new BadRequestException('Correo y contrasena son requeridos');
+    if (!primaryEmail || !cleanPassword) {
+      throw new BadRequestException('Usuario/correo y contrasena son requeridos');
     }
 
-    const user = await this.userModel.findOne({ email: cleanEmail });
+    let user: UserDocument | null = null;
+    for (const email of cleanEmails) {
+      user = await this.userModel.findOne({ email });
+      if (user) {
+        break;
+      }
+    }
+
     if (!user) {
-      const gpsUser = await this.loginWithMontaoGps(cleanEmail, cleanPassword);
+      const gpsUser = await this.loginWithMontaoGps(primaryEmail, cleanPassword);
       if (!gpsUser) {
         throw new UnauthorizedException('Credenciales invalidas');
       }
 
-      const syncedUser = await this.createUserFromMontaoGps(cleanEmail, cleanPassword, gpsUser);
+      const syncedUser = await this.createUserFromMontaoGps(primaryEmail, cleanPassword, gpsUser);
       return this.createSession(syncedUser);
     }
 
@@ -109,6 +130,20 @@ export class AuthService {
     }
 
     return this.createSession(user);
+  }
+
+  private normalizeLoginEmails(value: unknown): string[] {
+    const input = String(value || '').trim().toLowerCase();
+
+    if (!input) {
+      return [];
+    }
+
+    if (input.includes('@')) {
+      return [input];
+    }
+
+    return [`${input}@montao.net`, `${input}@monta.net`, `${input}@montao.local`];
   }
 
   async updateMe(
@@ -147,6 +182,11 @@ export class AuthService {
       }
     }
 
+    const shouldProvisionMailbox =
+      cleanEmail !== user.email ||
+      (this.mailCredentialService.isManagedEmail(cleanEmail) &&
+        (!user.mailEmail || !user.mailPasswordEncrypted || user.mailEmail !== cleanEmail));
+
     user.name = cleanName;
     user.email = cleanEmail;
 
@@ -154,7 +194,23 @@ export class AuthService {
       user.passwordHash = await bcrypt.hash(cleanPassword, 12);
     }
 
+    if (shouldProvisionMailbox) {
+      Object.assign(user, await this.provisionMailboxCredentials(cleanEmail));
+    } else if (!this.mailCredentialService.isManagedEmail(cleanEmail)) {
+      user.mailEmail = undefined;
+      user.mailPasswordEncrypted = undefined;
+    }
+
     await user.save();
+
+    return this.createSession(user);
+  }
+
+  async getMe(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub);
+    if (!user) {
+      throw new UnauthorizedException('Sesion invalida');
+    }
 
     return this.createSession(user);
   }
@@ -227,6 +283,8 @@ export class AuthService {
     if (!rentApiToken) {
       throw new ServiceUnavailableException('No se configuro el token de Montao Rent');
     }
+
+    await this.ensureMontaoRentUser(user.email, user.name);
 
     const response = await fetch(`${rentApiUrl}/auth/sso/exchange`, {
       method: 'POST',
@@ -337,7 +395,7 @@ export class AuthService {
     }
 
     return {
-      exists: await this.userExistsInMontaoRent(user.email),
+      exists: await this.ensureMontaoRentUser(user.email, user.name),
     };
   }
 
@@ -363,6 +421,7 @@ export class AuthService {
     return {
       token,
       user: {
+        id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
@@ -539,11 +598,92 @@ export class AuthService {
       return existingUser;
     }
 
+    const mailCredentials = await this.provisionMailboxCredentials(cleanGpsEmail);
+    await this.ensureMontaoRentUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
+
     return this.userModel.create({
       email: cleanGpsEmail,
       passwordHash: await bcrypt.hash(password, 12),
       name: fullName || cleanGpsEmail,
       role: typeof gpsUser.role === 'string' && gpsUser.role.trim() ? gpsUser.role : 'user',
+      ...mailCredentials,
     });
+  }
+
+  private async provisionMailboxCredentials(email: string) {
+    if (!this.mailCredentialService.isManagedEmail(email)) {
+      return {
+        mailEmail: undefined,
+        mailPasswordEncrypted: undefined,
+      };
+    }
+
+    const mailboxPassword = this.mailCredentialService.generateMailboxPassword();
+    await this.cpanelEmailService.ensureEmailAccount(email, mailboxPassword, {
+      updatePasswordIfExists: true,
+    });
+
+    return this.mailCredentialService.credentialForManagedEmail(email, mailboxPassword);
+  }
+
+  private async ensureMontaoRentUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<boolean> {
+    const exists = await this.userExistsInMontaoRent(email);
+    if (exists) {
+      await this.provisionMontaoRentUser(email, name, password).catch(() => undefined);
+      return true;
+    }
+
+    await this.provisionMontaoRentUser(email, name, password);
+    return true;
+  }
+
+  private async provisionMontaoRentUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<void> {
+    const rentApiUrl = process.env['RENT_API_URL'] || 'https://backend-rent.montao.net';
+    const rentApiToken = process.env['RENT_API_TOKEN'];
+
+    if (!rentApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao Rent');
+    }
+
+    const response = await fetch(`${rentApiUrl}/auth/sso/provision-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${rentApiToken}`,
+      },
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      const payload = (await response
+        ?.json()
+        .catch(() => ({ message: 'No se pudo conectar el usuario con Montao Rent' }))) as
+        | { message?: string }
+        | undefined;
+
+      throw new ServiceUnavailableException(
+        payload?.message || 'No se pudo conectar el usuario con Montao Rent',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoRentProvisionResponse | null;
+    if (!payload || payload.connected !== true) {
+      throw new ServiceUnavailableException(
+        'Montao Rent no confirmo la conexion del usuario',
+      );
+    }
   }
 }

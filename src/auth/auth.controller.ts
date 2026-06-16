@@ -16,6 +16,12 @@ export class AuthController {
     return this.authService.login(body);
   }
 
+  @Get('me')
+  @UseGuards(AuthGuard)
+  me(@Req() request: AuthenticatedRequest) {
+    return this.authService.getMe(request);
+  }
+
   @Patch('me')
   @UseGuards(AuthGuard)
   updateMe(

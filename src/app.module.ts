@@ -6,10 +6,16 @@ import { AppsController } from './apps/apps.controller';
 import { AppsService } from './apps/apps.service';
 import { AuthController, SsoController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
+import { CpanelEmailService } from './cpanel/cpanel-email.service';
 import { HealthController } from './health/health.controller';
+import { MailCredentialService } from './mailbox/mail-credential.service';
+import { MailboxController } from './mailbox/mailbox.controller';
+import { MailboxService } from './mailbox/mailbox.service';
 import { CompanyApp, CompanyAppSchema } from './schemas/company-app.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { StartupService } from './startup.service';
+import { UsersController } from './users/users.controller';
+import { UsersService } from './users/users.service';
 
 @Module({
   imports: [
@@ -31,7 +37,22 @@ import { StartupService } from './startup.service';
       signOptions: { expiresIn: '12h' },
     }),
   ],
-  controllers: [AppsController, AuthController, HealthController, SsoController],
-  providers: [AppsService, AuthService, StartupService],
+  controllers: [
+    AppsController,
+    AuthController,
+    HealthController,
+    MailboxController,
+    SsoController,
+    UsersController,
+  ],
+  providers: [
+    AppsService,
+    AuthService,
+    CpanelEmailService,
+    MailCredentialService,
+    MailboxService,
+    StartupService,
+    UsersService,
+  ],
 })
 export class AppModule {}

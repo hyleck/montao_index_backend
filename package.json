@@ -6,6 +6,8 @@
     "build": "tsc -p tsconfig.json",
     "heroku-postbuild": "npm run build",
     "start": "node dist/main.js",
+    "diagnose:mail": "node scripts/diagnose-mail-connectivity.js",
+    "sync:cpanel-emails": "node scripts/sync-cpanel-email-users.js",
     "start:dev": "npm run build && node dist/main.js"
   },
   "engines": {
@@ -18,9 +20,14 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/mongoose": "^11.0.4",
     "@nestjs/platform-express": "^11.1.24",
+    "@types/mailparser": "^3.4.6",
+    "@types/nodemailer": "^8.0.1",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
+    "imapflow": "^1.4.0",
+    "mailparser": "^3.9.9",
     "mongoose": "^9.6.2",
+    "nodemailer": "^8.0.11",
     "reflect-metadata": "^0.2.2",
     "rxjs": "~7.8.0"
   },
