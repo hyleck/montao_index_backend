@@ -38,6 +38,16 @@ interface MontaoRentProvisionResponse {
   created?: boolean;
 }
 
+interface MontaoCrmProvisionResponse {
+  connected?: boolean;
+  created?: boolean;
+}
+
+interface MontaoAdminProvisionResponse {
+  connected?: boolean;
+  created?: boolean;
+}
+
 interface MontaoCrmUser {
   email?: string;
 }
@@ -78,13 +88,10 @@ export class AuthService {
       throw new ConflictException('Este correo no esta disponible');
     }
 
-    const crmUserExists = await this.userExistsInMontaoCrm(cleanEmail);
-    if (crmUserExists) {
-      throw new ConflictException('Este correo no esta disponible');
-    }
-
     const mailCredentials = await this.provisionMailboxCredentials(cleanEmail);
     await this.ensureMontaoRentUser(cleanEmail, cleanName, cleanPassword);
+    await this.ensureMontaoCrmUser(cleanEmail, cleanName, cleanPassword);
+    await this.ensureMontaoAdminUser(cleanEmail, cleanName, cleanPassword);
 
     const user = await this.userModel.create({
       email: cleanEmail,
@@ -338,6 +345,8 @@ export class AuthService {
       throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
     }
 
+    await this.ensureMontaoCrmUser(user.email, user.name);
+
     const response = await fetch(`${crmApiUrl}/api/auth/sso/exchange`, {
       method: 'POST',
       headers: {
@@ -407,7 +416,7 @@ export class AuthService {
     }
 
     return {
-      exists: await this.userExistsInMontaoCrm(user.email),
+      exists: await this.ensureMontaoCrmUser(user.email, user.name),
     };
   }
 
@@ -600,6 +609,8 @@ export class AuthService {
 
     const mailCredentials = await this.provisionMailboxCredentials(cleanGpsEmail);
     await this.ensureMontaoRentUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
+    await this.ensureMontaoCrmUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
+    await this.ensureMontaoAdminUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
 
     return this.userModel.create({
       email: cleanGpsEmail,
@@ -638,6 +649,30 @@ export class AuthService {
     }
 
     await this.provisionMontaoRentUser(email, name, password);
+    return true;
+  }
+
+  private async ensureMontaoCrmUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<boolean> {
+    const exists = await this.userExistsInMontaoCrm(email);
+    if (exists) {
+      await this.provisionMontaoCrmUser(email, name, password).catch(() => undefined);
+      return true;
+    }
+
+    await this.provisionMontaoCrmUser(email, name, password);
+    return true;
+  }
+
+  private async ensureMontaoAdminUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<boolean> {
+    await this.provisionMontaoAdminUser(email, name, password);
     return true;
   }
 
@@ -685,5 +720,110 @@ export class AuthService {
         'Montao Rent no confirmo la conexion del usuario',
       );
     }
+  }
+
+  private async provisionMontaoCrmUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<void> {
+    const crmApiUrl = process.env['CRM_API_URL'] || 'https://crmbackend.dorhu.com';
+    const crmApiToken = process.env['CRM_API_TOKEN'];
+
+    if (!crmApiToken) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
+    }
+
+    const response = await fetch(`${crmApiUrl}/api/auth/sso/provision-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${crmApiToken}`,
+      },
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      const payload = (await response
+        ?.json()
+        .catch(() => ({ message: 'No se pudo conectar el usuario con Montao CRM' }))) as
+        | { message?: string }
+        | undefined;
+
+      throw new ServiceUnavailableException(
+        payload?.message || 'No se pudo conectar el usuario con Montao CRM',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoCrmProvisionResponse | null;
+    if (!payload || payload.connected !== true) {
+      throw new ServiceUnavailableException(
+        'Montao CRM no confirmo la conexion del usuario',
+      );
+    }
+  }
+
+  private async provisionMontaoAdminUser(
+    email: string,
+    name: string,
+    password?: string,
+  ): Promise<void> {
+    const response = await fetch(`${this.montaoAdminApiUrl()}/api/user/sso/provision-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-montao-index-sso-secret': this.montaoAdminSsoSecret(),
+      },
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      const payload = (await response
+        ?.json()
+        .catch(() => ({ message: 'No se pudo conectar el usuario con Montao Admin' }))) as
+        | { message?: string }
+        | undefined;
+
+      throw new ServiceUnavailableException(
+        payload?.message || 'No se pudo conectar el usuario con Montao Admin',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | MontaoAdminProvisionResponse
+      | null;
+
+    if (!payload || payload.connected !== true) {
+      throw new ServiceUnavailableException(
+        'Montao Admin no confirmo la conexion del usuario',
+      );
+    }
+  }
+
+  private montaoAdminApiUrl(): string {
+    return (
+      process.env['MONTAO_ADMIN_API_URL'] ||
+      process.env['ADMIN_API_URL'] ||
+      'https://back-montao.dorhu.com'
+    ).replace(/\/+$/, '');
+  }
+
+  private montaoAdminSsoSecret(): string {
+    return (
+      process.env['MONTAO_ADMIN_SSO_SECRET'] ||
+      process.env['MONTAO_INDEX_SSO_SECRET'] ||
+      process.env['MONTAO_GPS_SSO_SECRET'] ||
+      'montao_index_sso_dev_secret'
+    );
   }
 }

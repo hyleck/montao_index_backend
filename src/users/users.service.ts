@@ -54,6 +54,20 @@ interface MontaoRentUserExistsResponse {
   exists?: boolean;
 }
 
+interface MontaoCrmUserExistsResponse {
+  exists?: boolean;
+}
+
+interface MontaoCrmProvisionResponse {
+  connected?: boolean;
+  created?: boolean;
+}
+
+interface MontaoAdminProvisionResponse {
+  connected?: boolean;
+  created?: boolean;
+}
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -131,6 +145,8 @@ export class UsersService {
     const mailCredentials = await this.provisionMailboxCredentials(cleanEmail);
     await this.ensureMontaoGpsUser(cleanEmail, cleanName, cleanPassword);
     await this.ensureMontaoRentUser(cleanEmail, cleanName, cleanPassword);
+    await this.ensureMontaoCrmUser(cleanEmail, cleanName, cleanPassword);
+    await this.ensureMontaoAdminUser(cleanEmail, cleanName, cleanPassword);
 
     const user = await this.userModel.create({
       email: cleanEmail,
@@ -326,6 +342,24 @@ export class UsersService {
     await this.provisionMontaoRentUser(email, name, password);
   }
 
+  private async ensureMontaoCrmUser(email: string, name: string, password: string): Promise<void> {
+    const exists = await this.userExistsInMontaoCrm(email);
+    if (exists) {
+      await this.provisionMontaoCrmUser(email, name, password).catch(() => undefined);
+      return;
+    }
+
+    await this.provisionMontaoCrmUser(email, name, password);
+  }
+
+  private async ensureMontaoAdminUser(
+    email: string,
+    name: string,
+    password: string,
+  ): Promise<void> {
+    await this.provisionMontaoAdminUser(email, name, password);
+  }
+
   private async userExistsInMontaoGps(email: string): Promise<boolean> {
     const response = await fetch(`${this.montaoGpsApiUrl()}/auth/sso/user-exists`, {
       method: 'POST',
@@ -378,6 +412,35 @@ export class UsersService {
     if (!payload || typeof payload.exists !== 'boolean') {
       throw new ServiceUnavailableException(
         'Montao Rent no devolvio una validacion de usuario valida',
+      );
+    }
+
+    return payload.exists;
+  }
+
+  private async userExistsInMontaoCrm(email: string): Promise<boolean> {
+    const response = await fetch(
+      `${this.montaoCrmApiUrl()}/api/users/exists-by-email?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${this.montaoCrmApiToken()}`,
+        },
+      },
+    ).catch(() => null);
+
+    if (!response?.ok) {
+      throw new ServiceUnavailableException(
+        'No se pudo validar si el usuario existe en Montao CRM',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | MontaoCrmUserExistsResponse
+      | null;
+
+    if (!payload || typeof payload.exists !== 'boolean') {
+      throw new ServiceUnavailableException(
+        'Montao CRM no devolvio una validacion de usuario valida',
       );
     }
 
@@ -447,6 +510,86 @@ export class UsersService {
     }
   }
 
+  private async provisionMontaoCrmUser(
+    email: string,
+    name: string,
+    password: string,
+  ): Promise<void> {
+    const response = await fetch(`${this.montaoCrmApiUrl()}/api/auth/sso/provision-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.montaoCrmApiToken()}`,
+      },
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      const payload = (await response
+        ?.json()
+        .catch(() => ({ message: 'No se pudo registrar el usuario en Montao CRM' }))) as
+        | { message?: string }
+        | undefined;
+
+      throw new ServiceUnavailableException(
+        payload?.message || 'No se pudo registrar el usuario en Montao CRM',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | MontaoCrmProvisionResponse
+      | null;
+
+    if (!payload || payload.connected !== true) {
+      throw new ServiceUnavailableException('Montao CRM no confirmo la conexion del usuario');
+    }
+  }
+
+  private async provisionMontaoAdminUser(
+    email: string,
+    name: string,
+    password: string,
+  ): Promise<void> {
+    const response = await fetch(`${this.montaoAdminApiUrl()}/api/user/sso/provision-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-montao-index-sso-secret': this.montaoAdminSsoSecret(),
+      },
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      const payload = (await response
+        ?.json()
+        .catch(() => ({ message: 'No se pudo registrar el usuario en Montao Admin' }))) as
+        | { message?: string }
+        | undefined;
+
+      throw new ServiceUnavailableException(
+        payload?.message || 'No se pudo registrar el usuario en Montao Admin',
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | MontaoAdminProvisionResponse
+      | null;
+
+    if (!payload || payload.connected !== true) {
+      throw new ServiceUnavailableException('Montao Admin no confirmo la conexion del usuario');
+    }
+  }
+
   private montaoGpsApiUrl(): string {
     return (process.env['MONTAO_GPS_API_URL'] || 'https://tracker-back.dorhu.com').replace(/\/+$/, '');
   }
@@ -471,6 +614,37 @@ export class UsersService {
     }
 
     return token;
+  }
+
+  private montaoCrmApiUrl(): string {
+    return (process.env['CRM_API_URL'] || 'https://crmbackend.dorhu.com').replace(/\/+$/, '');
+  }
+
+  private montaoCrmApiToken(): string {
+    const token = process.env['CRM_API_TOKEN'];
+
+    if (!token) {
+      throw new ServiceUnavailableException('No se configuro el token de Montao CRM');
+    }
+
+    return token;
+  }
+
+  private montaoAdminApiUrl(): string {
+    return (
+      process.env['MONTAO_ADMIN_API_URL'] ||
+      process.env['ADMIN_API_URL'] ||
+      'https://back-montao.dorhu.com'
+    ).replace(/\/+$/, '');
+  }
+
+  private montaoAdminSsoSecret(): string {
+    return (
+      process.env['MONTAO_ADMIN_SSO_SECRET'] ||
+      process.env['MONTAO_INDEX_SSO_SECRET'] ||
+      process.env['MONTAO_GPS_SSO_SECRET'] ||
+      'montao_index_sso_dev_secret'
+    );
   }
 
   private async buildDelegatedMailboxSelection(
