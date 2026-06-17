@@ -48,6 +48,12 @@ interface MontaoAdminProvisionResponse {
   created?: boolean;
 }
 
+interface MontaoAdminSsoResponse extends MontaoAdminProvisionResponse {
+  access_token?: string;
+  token?: string;
+  user?: unknown;
+}
+
 interface MontaoCrmUser {
   email?: string;
 }
@@ -384,6 +390,57 @@ export class AuthService {
     };
   }
 
+  async createMontaoAdminSso(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    const response = await fetch(`${this.montaoAdminApiUrl()}/api/user/sso/exchange`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-montao-index-sso-secret': this.montaoAdminSsoSecret(),
+      },
+      body: JSON.stringify({
+        email: user.email,
+        name: user.name,
+        source: 'montao_index',
+      }),
+    }).catch(() => null);
+
+    if (!response) {
+      throw new ServiceUnavailableException('No se pudo conectar con Montao Admin');
+    }
+
+    if (!response.ok) {
+      const payload = (await response
+        .json()
+        .catch(() => ({ message: 'No se pudo iniciar SSO con Montao Admin' }))) as {
+        message?: string;
+      };
+      throw new HttpException(
+        payload.message || 'No se pudo iniciar SSO con Montao Admin',
+        response.status,
+      );
+    }
+
+    const payload = (await response.json().catch(() => null)) as MontaoAdminSsoResponse | null;
+    const ssoToken = payload?.access_token || payload?.token;
+
+    if (!ssoToken) {
+      throw new ServiceUnavailableException('Montao Admin no devolvio un token SSO valido');
+    }
+
+    const token = encodeURIComponent(ssoToken);
+    const adminUser = encodeURIComponent(JSON.stringify(payload.user || {}));
+
+    return {
+      redirectUrl: `${this.montaoAdminFrontendUrl()}/auth/sso?token=${token}&user=${adminUser}`,
+    };
+  }
+
   async currentUserExistsInMontaoGps(request: AuthenticatedRequest) {
     const user = await this.userModel.findById(request.user.sub).lean();
 
@@ -417,6 +474,18 @@ export class AuthService {
 
     return {
       exists: await this.ensureMontaoCrmUser(user.email, user.name),
+    };
+  }
+
+  async currentUserExistsInMontaoAdmin(request: AuthenticatedRequest) {
+    const user = await this.userModel.findById(request.user.sub).lean();
+
+    if (!user?.email) {
+      throw new BadRequestException('Este usuario no tiene correo configurado en Montao Index.');
+    }
+
+    return {
+      exists: await this.ensureMontaoAdminUser(user.email, user.name),
     };
   }
 
@@ -815,6 +884,14 @@ export class AuthService {
       process.env['MONTAO_ADMIN_API_URL'] ||
       process.env['ADMIN_API_URL'] ||
       'https://back-montao.dorhu.com'
+    ).replace(/\/+$/, '');
+  }
+
+  private montaoAdminFrontendUrl(): string {
+    return (
+      process.env['MONTAO_ADMIN_FRONTEND_URL'] ||
+      process.env['ADMIN_FRONTEND_URL'] ||
+      'https://gestion.montao.net'
     ).replace(/\/+$/, '');
   }
 

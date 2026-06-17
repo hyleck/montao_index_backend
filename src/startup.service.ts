@@ -84,7 +84,7 @@ const defaultApps = [
     category: 'Ventas',
     group: 'Productividad',
     owner: 'Marketplace',
-    url: 'http://localhost:4600',
+    url: 'https://gestion.montao.net',
     status: 'Revision',
     initials: 'MP',
     icon: '▧',
@@ -178,6 +178,11 @@ export class StartupService implements OnModuleInit {
       );
     }
 
+    await this.appModel.deleteOne({ name: 'Montao Marketing' });
+    await this.appModel.updateOne(
+      { name: 'Montao Marketplace' },
+      { $set: { url: 'https://gestion.montao.net' } },
+    );
     await this.appModel.updateMany({ name: 'GPS Mobile' }, { $set: { name: 'Montao GPS' } });
   }
 }
