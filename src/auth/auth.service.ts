@@ -58,6 +58,8 @@ interface MontaoCrmUser {
   email?: string;
 }
 
+type MontaoAdminAccessType = 'catalog' | 'full';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -97,7 +99,7 @@ export class AuthService {
     const mailCredentials = await this.provisionMailboxCredentials(cleanEmail);
     await this.ensureMontaoRentUser(cleanEmail, cleanName, cleanPassword);
     await this.ensureMontaoCrmUser(cleanEmail, cleanName, cleanPassword);
-    await this.ensureMontaoAdminUser(cleanEmail, cleanName, cleanPassword);
+    await this.ensureMontaoAdminUser(cleanEmail, cleanName, cleanPassword, 'user');
 
     const user = await this.userModel.create({
       email: cleanEmail,
@@ -252,6 +254,8 @@ export class AuthService {
       body: JSON.stringify({
         email: user.email,
         name: user.name,
+        indexRole: user.role,
+        adminAccessType: this.montaoAdminAccessTypeForIndexRole(user.role),
         source: 'montao_index',
       }),
     });
@@ -485,7 +489,7 @@ export class AuthService {
     }
 
     return {
-      exists: await this.ensureMontaoAdminUser(user.email, user.name),
+      exists: await this.ensureMontaoAdminUser(user.email, user.name, undefined, user.role),
     };
   }
 
@@ -670,6 +674,7 @@ export class AuthService {
       .map((value) => String(value || '').trim())
       .filter(Boolean)
       .join(' ');
+    const indexRole = typeof gpsUser.role === 'string' && gpsUser.role.trim() ? gpsUser.role : 'user';
 
     const existingUser = await this.userModel.findOne({ email: cleanGpsEmail });
     if (existingUser) {
@@ -679,13 +684,13 @@ export class AuthService {
     const mailCredentials = await this.provisionMailboxCredentials(cleanGpsEmail);
     await this.ensureMontaoRentUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
     await this.ensureMontaoCrmUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
-    await this.ensureMontaoAdminUser(cleanGpsEmail, fullName || cleanGpsEmail, password);
+    await this.ensureMontaoAdminUser(cleanGpsEmail, fullName || cleanGpsEmail, password, indexRole);
 
     return this.userModel.create({
       email: cleanGpsEmail,
       passwordHash: await bcrypt.hash(password, 12),
       name: fullName || cleanGpsEmail,
-      role: typeof gpsUser.role === 'string' && gpsUser.role.trim() ? gpsUser.role : 'user',
+      role: indexRole,
       ...mailCredentials,
     });
   }
@@ -740,8 +745,9 @@ export class AuthService {
     email: string,
     name: string,
     password?: string,
+    indexRole?: string,
   ): Promise<boolean> {
-    await this.provisionMontaoAdminUser(email, name, password);
+    await this.provisionMontaoAdminUser(email, name, password, indexRole);
     return true;
   }
 
@@ -841,7 +847,9 @@ export class AuthService {
     email: string,
     name: string,
     password?: string,
+    indexRole?: string,
   ): Promise<void> {
+    const adminAccessType = this.montaoAdminAccessTypeForIndexRole(indexRole);
     const response = await fetch(`${this.montaoAdminApiUrl()}/api/user/sso/provision-user`, {
       method: 'POST',
       headers: {
@@ -852,6 +860,8 @@ export class AuthService {
         email,
         name,
         password,
+        indexRole,
+        adminAccessType,
         source: 'montao_index',
       }),
     }).catch(() => null);
@@ -893,6 +903,10 @@ export class AuthService {
       process.env['ADMIN_FRONTEND_URL'] ||
       'https://gestion.montao.net'
     ).replace(/\/+$/, '');
+  }
+
+  private montaoAdminAccessTypeForIndexRole(role?: unknown): MontaoAdminAccessType {
+    return String(role || '').trim().toLowerCase() === 'admin' ? 'full' : 'catalog';
   }
 
   private montaoAdminSsoSecret(): string {
